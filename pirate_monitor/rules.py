@@ -33,9 +33,11 @@ WEAK_USER_WRITABLE = _rx(r"/appdata/roaming/|/programdata/(?!microsoft/|package 
 # --------------------------------------------------------------------------------------------
 # Files
 # --------------------------------------------------------------------------------------------
+_TASK_FILES = _rx(r"/windows/system32/tasks/|/windows/tasks/")
+
 FILE_RULES: List[Tuple["re.Pattern[str]", str, str]] = [
     (_rx(r"/start menu/programs/startup/"), "alert", "Startup folder: runs automatically at logon"),
-    (_rx(r"/windows/system32/tasks/|/windows/tasks/"), "alert", "Scheduled task definition"),
+    (_TASK_FILES, "alert", "Scheduled task definition"),
     (_rx(r"/drivers/etc/hosts$"), "alert", "hosts file changed: can redirect websites"),
     (_rx(r"powershell/.*profile\.ps1$"), "alert", "PowerShell profile: runs every time PowerShell starts"),
     (_rx(r"/windows/(system32|syswow64)/(drivers/)?[^/]+\.(sys|dll|exe|scr|cpl|ocx)$"), "alert",
@@ -298,6 +300,8 @@ class Rules:
             if rx.search(p):
                 if removed:
                     ev.flag("notice", "Removed: " + reason)
+                elif ev.action == "modified" and rx is _TASK_FILES:
+                    ev.flag("notice", "Existing scheduled task updated")  # Windows does this routinely
                 else:
                     ev.flag(level, reason)
 

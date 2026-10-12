@@ -47,6 +47,13 @@ def test_startup_folder_file_is_an_alert():
     assert ev.severity == "alert"
 
 
+def test_scheduled_task_files():
+    created = graded(Event("file", "created", r"C:\Windows\System32\Tasks\Updater"))
+    assert created.severity == "alert"
+    updated = graded(Event("file", "modified", r"C:\Windows\System32\Tasks\Microsoft\Windows\SoftwareProtectionPlatform\SvcRestartTask"))
+    assert updated.severity == "notice"
+
+
 def test_executable_dropped_in_temp():
     ev = graded(Event("file", "created", r"C:\Users\bob\AppData\Local\Temp\a1b2.exe"))
     assert ev.severity == "warning"

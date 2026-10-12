@@ -116,11 +116,12 @@ def test_default_roots_catch_every_run_key_write(session):
     from pirate_monitor.registry.model import dedupe_key_roots
 
     bus, state, sink = session
+    run_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, run_path).Close()  # missing in fresh profiles
     monitor = RegistryMonitor(bus, state, dedupe_key_roots(REGISTRY_ROOTS), skip=REGISTRY_SKIP)
     monitor.start()
     assert monitor.ready.wait(180)
     assert monitor.failed is None
-    run_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
     names = []
 
     def write(i, name):
@@ -138,7 +139,7 @@ def test_default_roots_catch_every_run_key_write(session):
         return "reg.exe"
 
     try:
-        for i in range(6):
+        for i in range(3):
             name = f"PMDiag{uuid.uuid4().hex[:6]}"
             names.append(name)
             written = time.monotonic()

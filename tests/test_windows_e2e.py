@@ -8,7 +8,7 @@ import pytest
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 
-RUN_KEY = r"HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_KEY = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
 
 
 def test_sample_persistence_is_caught_end_to_end(tmp_path, capsys):
@@ -22,11 +22,13 @@ def test_sample_persistence_is_caught_end_to_end(tmp_path, capsys):
     dropped = watched / "stage2.bat"
     script = (
         f"Set-Content -Path '{dropped}' -Value 'echo hi'; "
-        f"New-ItemProperty -Path '{RUN_KEY}' -Name {name} -Value '{dropped}' -Force | Out-Null; "
+        f"reg.exe add '{RUN_KEY}' /v {name} /d '{dropped}' /f | Out-Null; "
         "cmd.exe /c whoami | Out-Null; "
         "Start-Sleep -Seconds 3"
     )
     out = tmp_path / "out"
+    # A fresh user profile (e.g. CI) may not have a Run key yet; create it before the baseline.
+    winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run").Close()
     try:
         code = main([
             "--watch", str(watched), "--no-color", "--stop-when-done", "--duration", "300", "-o", str(out),
@@ -59,6 +61,8 @@ def test_sample_persistence_is_caught_end_to_end(tmp_path, capsys):
     assert run, "Run key write not seen"
     assert run[0]["severity"] == "alert"
     assert any("dropped" in r for r in run[0]["reasons"]), run[0]
+    reg_exe = find("process", "started", lambda e: (e["details"].get("name") or "").lower() == "reg.exe")
+    assert reg_exe and reg_exe[0]["tracked"]
 
     assert find("file", "created", lambda e: e["target"].lower().endswith("stage2.bat"))
     ps = find("process", "started", lambda e: (e["details"].get("name") or "").lower() == "powershell.exe")
