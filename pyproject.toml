@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pirate-monitor"
+version = "0.1.0"
+description = "Live monitor of file, registry, process and network activity - see everything a program does to your computer."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = [
+    "psutil>=5.9",
+    "watchdog>=3.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]
+
+[project.scripts]
+pirate-monitor = "pirate_monitor.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["pirate_monitor*"]
