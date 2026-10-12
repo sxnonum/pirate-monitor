@@ -123,7 +123,7 @@ class _WaitGroup(threading.Thread):
     def __init__(self, signals: "queue.Queue[int]"):
         super().__init__(name="pm-reg-wait", daemon=True)
         self._signals = signals
-        self._lock = threading.Lock()
+        self._mutex = threading.Lock()
         self._wake = _new_event()
         self._entries: Dict[int, int] = {}
         self._to_add: List[tuple] = []
@@ -132,23 +132,23 @@ class _WaitGroup(threading.Thread):
         self.count = 0  # reserved slots, maintained by the notifier thread
 
     def add(self, uid: int, event: int) -> None:
-        with self._lock:
+        with self._mutex:
             self._to_add.append((uid, event))
         _SetEvent(self._wake)
 
     def remove(self, uid: int) -> None:
-        with self._lock:
+        with self._mutex:
             self._to_remove.append(uid)
         _SetEvent(self._wake)
 
     def stop(self) -> None:
-        with self._lock:
+        with self._mutex:
             self._stopping = True
         _SetEvent(self._wake)
 
     def run(self) -> None:
         while True:
-            with self._lock:
+            with self._mutex:
                 for uid, event in self._to_add:
                     self._entries[uid] = event
                 self._to_add.clear()
