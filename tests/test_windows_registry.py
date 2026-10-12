@@ -103,3 +103,51 @@ def test_live_notifications_report_exact_changes(session, test_key, split_thresh
         assert wait_for(lambda: sink.find("registry", "value_created", value="again"))
     finally:
         monitor.stop()
+
+
+def test_default_roots_catch_every_run_key_write(session):
+    """Full default configuration (thousands of watch units) must not miss autorun writes."""
+    import time
+    import winreg
+
+    from pirate_monitor.defaults import REGISTRY_ROOTS, REGISTRY_SKIP
+    from pirate_monitor.monitors.registry import RegistryMonitor
+    from pirate_monitor.registry.model import dedupe_key_roots
+
+    bus, state, sink = session
+    monitor = RegistryMonitor(bus, state, dedupe_key_roots(REGISTRY_ROOTS), skip=REGISTRY_SKIP)
+    monitor.start()
+    assert monitor.ready.wait(180)
+    assert monitor.failed is None
+    run_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
+    names = []
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, run_path, 0, winreg.KEY_SET_VALUE) as key:
+            for i in range(5):
+                name = f"PMDiag{uuid.uuid4().hex[:6]}"
+                names.append(name)
+                written = time.monotonic()
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, r"C:\diag.exe")
+                seen = wait_for(lambda: sink.find("registry", "value_created", value=name), timeout=15)
+                diag = monitor.diagnose("HKCU\\" + run_path)
+                print(f"write {i}: seen={bool(seen)} after {time.monotonic() - written:.2f}s  {diag}")
+                if not seen:
+                    from pirate_monitor.registry.model import take_snapshot
+                    from pirate_monitor.registry.win32 import WinregBackend
+
+                    fresh = take_snapshot(WinregBackend(), "HKCU\\" + run_path, recursive=False)
+                    state = next(iter(fresh.values()))
+                    print("fresh read:", state.last_write, sorted(v[0] for v in state.values.values()))
+                    print("time now:", time.time())
+                assert seen, f"Run key write {i} missed; watcher state: {diag}"
+                time.sleep(1)
+    finally:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_path, 0, winreg.KEY_SET_VALUE) as key:
+            for name in names:
+                try:
+                    winreg.DeleteValue(key, name)
+                except OSError:
+                    pass
+        monitor.stop()
+        monitor.join(5)
+    print(monitor.stats_line())

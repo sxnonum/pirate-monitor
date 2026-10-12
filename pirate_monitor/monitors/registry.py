@@ -23,9 +23,15 @@ class PollingNotifier:
     def detach(self, unit) -> None:
         pass
 
+    signalled_at: dict = {}
+    signal_count = 0
+
     def wait(self, timeout: float) -> List[int]:
         time.sleep(timeout)
         return []
+
+    def describe(self, unit) -> dict:
+        return {"attached": False}
 
     def close(self) -> None:
         pass
@@ -77,6 +83,10 @@ class RegistryMonitor(Monitor):
         self.notifier = None
         self._polling: set = set()
         self.mode = "notifications"
+        self.rescans = 0
+        self.rescan_seconds = 0.0
+        self.slowest = (0.0, "")
+        self.max_lag = 0.0
 
     def start(self) -> None:
         self._spawn(self._run, "worker")
@@ -114,6 +124,48 @@ class RegistryMonitor(Monitor):
             self._loop()
         finally:
             self.notifier.close()
+            if self.ready.is_set() and self.tracker.units:
+                self.bus.system(self.stats_line())
+
+    def stats_line(self) -> str:
+        dead = sum(1 for u in self.tracker.units.values() if u.dead)
+        return (
+            f"[registry] {self.notifier.signal_count:,} change notifications, {self.rescans:,} re-scans "
+            f"({self.rescan_seconds:.1f}s, slowest {self.slowest[0]:.2f}s {self.slowest[1]}), "
+            f"max delay {self.max_lag:.1f}s, {len(self.tracker.units):,} units "
+            f"({len(self._polling)} polled, {dead} dead)"
+        )
+
+    def unit_covering(self, path: str):
+        key = canonical_key_path(path).lower()
+        best = None
+        for ukey, unit in self.tracker.units.items():
+            if key == ukey or key.startswith(ukey + "\\"):
+                if best is None or len(ukey) > len(best.key):
+                    best = unit
+        return best
+
+    def diagnose(self, path: str) -> dict:
+        """Debug helper: what is watching ``path`` right now."""
+        unit = self.unit_covering(path)
+        if unit is None:
+            return {"unit": None}
+        info = {
+            "unit": unit.path,
+            "uid": unit.uid,
+            "recursive": unit.recursive,
+            "dead": unit.dead,
+            "polled": unit.uid in self._polling,
+            "keys": len(unit.snapshot),
+        }
+        state = unit.snapshot.get(canonical_key_path(path).lower())
+        if state is not None:
+            info["cached_last_write"] = state.last_write
+            info["cached_read_time"] = round(state.read_time, 3)
+            info["cached_values"] = sorted(v[0] for v in state.values.values())
+        info.update(self.notifier.describe(unit))
+        info["stats"] = self.stats_line()
+        return info
 
     def _baseline(self) -> None:
         started = time.monotonic()
@@ -153,10 +205,19 @@ class RegistryMonitor(Monitor):
                 due = list(self._polling)
                 last_poll = now
             for uid in dict.fromkeys(ids + due):
+                signalled = self.notifier.signalled_at.pop(uid, None)
                 unit = self.tracker.by_id.get(uid)
                 if unit is None or unit.dead:
                     continue
+                started = time.monotonic()
+                if signalled is not None:
+                    self.max_lag = max(self.max_lag, started - signalled)
                 self._process(unit, polled=uid in self._polling)
+                took = time.monotonic() - started
+                self.rescans += 1
+                self.rescan_seconds += took
+                if took > self.slowest[0]:
+                    self.slowest = (took, unit.path)
 
     def _attach(self, unit) -> None:
         if not self.notifier.attach(unit):

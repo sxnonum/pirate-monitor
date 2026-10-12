@@ -303,7 +303,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             bus.system(f"killed {killed} tracked process(es)")
         for monitor in monitors:
             monitor.stop()
-        time.sleep(0.6)  # let monitor threads flush their last events
+        for monitor in monitors:
+            monitor.join(5.0)  # let monitor threads flush their last events
         bus.stop()
 
     ended = time.time()

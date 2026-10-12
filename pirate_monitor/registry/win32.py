@@ -98,6 +98,10 @@ _CloseHandle = _kernel32.CloseHandle
 _CloseHandle.argtypes = [wintypes.HANDLE]
 _CloseHandle.restype = wintypes.BOOL
 
+_WaitForSingleObject = _kernel32.WaitForSingleObject
+_WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+_WaitForSingleObject.restype = wintypes.DWORD
+
 _WaitForMultipleObjects = _kernel32.WaitForMultipleObjects
 _WaitForMultipleObjects.argtypes = [wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE), wintypes.BOOL, wintypes.DWORD]
 _WaitForMultipleObjects.restype = wintypes.DWORD
@@ -120,7 +124,7 @@ def _register(hkey, recursive: bool, event: int) -> int:
 
 
 class _WaitGroup(threading.Thread):
-    def __init__(self, signals: "queue.Queue[int]"):
+    def __init__(self, signals: "queue.Queue[tuple]"):
         super().__init__(name="pm-reg-wait", daemon=True)
         self._signals = signals
         self._mutex = threading.Lock()
@@ -170,7 +174,7 @@ class _WaitGroup(threading.Thread):
                 continue
             index = rc - WAIT_OBJECT_0
             if 1 <= index < len(handles):
-                self._signals.put(ids[index - 1])
+                self._signals.put((ids[index - 1], time.monotonic()))
         for event in self._entries.values():
             _CloseHandle(event)
         self._entries.clear()
@@ -181,10 +185,12 @@ class Win32Notifier:
     """Event-driven change notification for registry units."""
 
     def __init__(self, debounce: float = 0.15):
-        self._signals: "queue.Queue[int]" = queue.Queue()
+        self._signals: "queue.Queue[tuple]" = queue.Queue()
         self._groups: List[_WaitGroup] = []
         self._entries: Dict[int, list] = {}  # uid -> [hkey, event, group]
         self._debounce = debounce
+        self.signalled_at: Dict[int, float] = {}  # uid -> monotonic time of the latest signal
+        self.signal_count = 0
 
     def _group_with_space(self) -> _WaitGroup:
         for group in self._groups:
@@ -250,13 +256,28 @@ class Win32Notifier:
         except queue.Empty:
             return []
         time.sleep(self._debounce)  # let a burst of writes finish before re-scanning
-        ids = [first]
+        items = [first]
         while True:
             try:
-                ids.append(self._signals.get_nowait())
+                items.append(self._signals.get_nowait())
             except queue.Empty:
                 break
+        self.signal_count += len(items)
+        ids = []
+        for uid, when in items:
+            self.signalled_at.setdefault(uid, when)
+            ids.append(uid)
         return list(dict.fromkeys(ids))
+
+    def describe(self, unit) -> dict:
+        entry = self._entries.get(unit.uid)
+        info = {"attached": entry is not None}
+        if entry is not None:
+            info["event_signalled_now"] = _WaitForSingleObject(entry[1], 0) == WAIT_OBJECT_0
+            info["group_size"] = entry[2].count
+        info["groups"] = len(self._groups)
+        info["queued_signals"] = self._signals.qsize()
+        return info
 
     def close(self) -> None:
         for entry in self._entries.values():
