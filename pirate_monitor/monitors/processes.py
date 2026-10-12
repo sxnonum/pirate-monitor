@@ -11,7 +11,7 @@ import shlex
 import subprocess
 import threading
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import psutil
 
@@ -66,6 +66,9 @@ class ProcessMonitor(Monitor):
         self.use_wmi = use_wmi and IS_WINDOWS
         self.track_pids = list(track_pids)
         self._known: Dict[int, ProcInfo] = {}
+        # Processes that are gone: pid -> (name, create time, when we saw them go). Used to name
+        # parents that already exited and to ignore WMI events that arrive after the poller.
+        self._recent: Dict[int, Tuple[str, float, float]] = {}
         self._lock = threading.RLock()
         self._hashes = HashCache(hash_max_bytes)
         self.wmi_active = False
@@ -120,7 +123,7 @@ class ProcessMonitor(Monitor):
                 continue
             with self._lock:
                 known = set(self._known)
-            for pid in sorted(current - known):
+            for pid in sorted(current - known, key=_create_time):  # parents before children
                 self._on_new(pid)
             for pid in known - current:
                 self._on_exit(pid)
@@ -153,6 +156,9 @@ class ProcessMonitor(Monitor):
             tracked, dropped_image, dropped_ref = self._classify(pid, ppid, name, exe, cmdline, ctime)
             self._known[pid] = ProcInfo(pid, ppid, name, exe, ctime)
             parent = self._known.get(ppid) if ppid else None
+            if parent is not None and parent.ctime > ctime + 1:
+                parent = None  # the parent pid now belongs to a newer process
+            parent_name = parent.name if parent is not None else self._recent_name(ppid, ctime)
         if existing is not None:
             self._emit_exit(existing)  # pid was reused before we noticed the old process exit
 
@@ -162,8 +168,8 @@ class ProcessMonitor(Monitor):
             "exe": exe,
             "cmdline": cmdline,
             "ppid": ppid,
-            "parent": parent.name if parent is not None and parent.ctime <= ctime + 1 else None,
-            "parent_exe": parent.exe if parent is not None and parent.ctime <= ctime + 1 else None,
+            "parent": parent_name,
+            "parent_exe": parent.exe if parent is not None else None,
             "user": user,
             "sha256": sha256,
             "create_time": ctime,
@@ -197,19 +203,25 @@ class ProcessMonitor(Monitor):
 
     def _emit_short_lived(self, pid: int, hint: dict) -> None:
         ppid = hint.get("ppid")
-        ctime = hint.get("ctime") or time.time()
+        hint_ctime = hint.get("ctime")
+        ctime = hint_ctime or time.time()
         with self._lock:
+            gone = self._recent.get(pid)
+            if gone is not None and (hint_ctime is None or abs(gone[1] - hint_ctime) < 2.0):
+                return  # the poller already reported it; this WMI event arrived late
             parent = self._known.get(ppid) if ppid else None
             parent_ct = self.state.tracked_ctime(ppid)
             tracked = parent_ct is not None and (parent is None or abs(parent.ctime - parent_ct) < 1.0)
             tracked = tracked or self.state.matches_track_name(hint.get("name"))
             if tracked:
                 self.state.track(pid, ctime)
+            parent_name = parent.name if parent is not None else self._recent_name(ppid, ctime)
+            self._remember(pid, hint.get("name") or "?", ctime)
         details = {
             "pid": pid,
             "name": hint.get("name"),
             "ppid": ppid,
-            "parent": parent.name if parent is not None else None,
+            "parent": parent_name,
             "short_lived": True,
             "create_time": ctime,
         }
@@ -218,8 +230,24 @@ class ProcessMonitor(Monitor):
     def _on_exit(self, pid: int) -> None:
         with self._lock:
             info = self._known.pop(pid, None)
+            if info is not None:
+                self._remember(pid, info.name, info.ctime)
         if info is not None:
             self._emit_exit(info)
+
+    def _remember(self, pid: int, name: str, ctime: float) -> None:
+        """Caller holds the lock."""
+        now = time.time()
+        self._recent[pid] = (name, ctime, now)
+        if len(self._recent) > 2000:
+            self._recent = {p: v for p, v in self._recent.items() if now - v[2] < 120}
+
+    def _recent_name(self, pid: Optional[int], child_ctime: float) -> Optional[str]:
+        """Name of a parent that has already exited. Caller holds the lock."""
+        gone = self._recent.get(pid) if pid else None
+        if gone is not None and gone[1] <= child_ctime + 1:
+            return gone[0]
+        return None
 
     def _emit_exit(self, info: ProcInfo) -> None:
         tracked = self.state.is_tracked(info.pid, info.ctime)
@@ -258,6 +286,7 @@ class ProcessMonitor(Monitor):
                             "(pip install pywin32)", "notice")
             return
         pythoncom.CoInitialize()
+        wmi = watcher = event = None
         try:
             try:
                 wmi = win32com.client.GetObject(r"winmgmts:{impersonationLevel=impersonate}!\\.\root\cimv2")
@@ -304,7 +333,16 @@ class ProcessMonitor(Monitor):
                     continue
                 self._on_new(pid, hint)
         finally:
+            # COM objects must be released before the apartment is torn down.
+            event = watcher = wmi = None
             pythoncom.CoUninitialize()
+
+
+def _create_time(pid: int) -> float:
+    try:
+        return psutil.Process(pid).create_time()
+    except psutil.Error:
+        return 0.0
 
 
 def _com_code(exc) -> Optional[int]:

@@ -177,3 +177,24 @@ def test_wmi_catches_short_lived_processes(session):
         assert found
     finally:
         monitor.stop()
+
+
+def test_late_wmi_event_for_already_reported_process_is_ignored(session):
+    bus, state, sink = session
+    monitor = ProcessMonitor(bus, state, interval=0.1, use_wmi=False)
+    monitor.start()
+    assert monitor.ready.wait(10)
+    try:
+        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.6)"])
+        started = wait_for(lambda: sink.find("process", "started", pid=proc.pid))
+        assert started
+        proc.wait(10)
+        assert wait_for(lambda: sink.find("process", "exited", pid=proc.pid))
+        # Simulate WMI delivering the start event after the poller already saw the exit.
+        monitor._on_new(proc.pid, {"name": "python", "ppid": os.getpid(),
+                                   "ctime": started[0].details["create_time"]})
+        bus.system("flush")
+        assert wait_for(lambda: sink.find("system", target_contains="flush"))
+        assert len(sink.find("process", "started", pid=proc.pid)) == 1
+    finally:
+        monitor.stop()

@@ -148,3 +148,8 @@ def test_extensionless_binary_found_by_content_is_flagged_by_location():
     assert ev.severity == "warning"
     ev = graded(Event("file", "executable", r"C:\Users\bob\AppData\Local\Temp\x.exe", {"kind": "PE executable"}))
     assert ev.severity == "info"  # already flagged on its "created" event
+
+
+def test_powershell_policy_test_files_are_noise():
+    ev = graded(Event("file", "created", r"C:\Users\bob\AppData\Local\Temp\__PSScriptPolicyTest_jgk4kbgy.jsi.ps1"))
+    assert ev.noise and ev.severity == "info"

@@ -7,6 +7,7 @@ from typing import Iterable, List, Optional
 
 from ..core import Event
 from ..registry.model import REG_TYPES, RegChange, RegistryTracker, canonical_key_path, format_value
+from ..util import is_admin
 from .base import Monitor
 
 
@@ -135,7 +136,8 @@ class RegistryMonitor(Monitor):
             f"{time.monotonic() - started:.1f}s, {unit_count} watch units, {how}"
         )
         if stats.denied:
-            msg += f" ({stats.denied:,} keys not readable{' - run as Administrator' if stats.denied > 50 else ''})"
+            hint = "" if is_admin() else " - run as Administrator to see them"
+            msg += f" ({stats.denied:,} protected keys not readable{hint})"
         if self._polling and self.mode == "notifications":
             msg += f"; {len(self._polling)} units polled"
         self.bus.system(msg)

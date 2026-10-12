@@ -59,4 +59,9 @@ def test_sample_persistence_is_caught_end_to_end(tmp_path, capsys):
     whoami = find("process", "started", lambda e: (e["details"].get("name") or "").lower() == "whoami.exe")
     assert whoami and whoami[0]["tracked"], "short-lived child should be caught (WMI) and tracked"
     assert any("baseline ready" in e["target"] for e in find("system", "message"))
+    # Running whoami.exe only updates its last-access time: that must not look like a write.
+    assert not find("file", "modified", lambda e: e["target"].lower().endswith("whoami.exe"))
+    # Poller and WMI must not both report the same process.
+    starts = [(e["details"]["pid"], e["details"].get("name")) for e in find("process", "started")]
+    assert len(starts) == len(set(starts)), starts
     assert (out / "report.html").exists()

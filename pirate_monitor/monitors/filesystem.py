@@ -13,6 +13,7 @@ from typing import Dict, Iterable, List, Optional
 from ..core import Event
 from ..util import (
     DOCUMENT_EXTS,
+    IS_WINDOWS,
     PE_EXTS,
     RISKY_EXTS,
     HashCache,
@@ -61,6 +62,7 @@ class FileSystemMonitor(Monitor):
         self._observer = None
         self.watched: List[str] = []
         self.suppressed = 0
+        self.access_only = 0
 
     # -- setup ------------------------------------------------------------------------------
     def start(self) -> None:
@@ -169,6 +171,11 @@ class FileSystemMonitor(Monitor):
                 self.state.add_dropped(src)
             self._emit("created", src, details)
         elif kind == "modified":
+            if IS_WINDOWS and self._unchanged_content(src, ts):
+                # Windows also reports last-access and attribute updates as "modified", so merely
+                # running or reading a file would look like a write. Skip when the content is old.
+                self.access_only += 1
+                return
             self._pending[src] = ts
             if ts - self._last_emit.get(src, 0.0) < self.coalesce_seconds:
                 self.suppressed += 1
@@ -189,6 +196,13 @@ class FileSystemMonitor(Monitor):
             details = {"from": src}
             details.update(self._stat_details(dest))
             self._emit("moved", dest, details)
+
+    def _unchanged_content(self, path: str, ts: float) -> bool:
+        try:
+            mtime = os.stat(path).st_mtime
+        except OSError:
+            return False
+        return mtime < ts - 5 and not self.state.is_dropped(path)
 
     @staticmethod
     def _stat_details(path: str) -> dict:

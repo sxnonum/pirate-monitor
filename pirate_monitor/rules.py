@@ -54,6 +54,9 @@ FILE_RULES: List[Tuple["re.Pattern[str]", str, str]] = [
     (_rx(r"/library/launch(agents|daemons)/"), "alert", "launchd job (macOS persistence)"),
 ]
 
+# Files Windows itself creates and deletes routinely, which would otherwise look like script drops.
+BENIGN_FILES = _rx(r"/__psscriptpolicytest_[^/]+\.(ps1|psm1)$")
+
 RANSOM_NOTE_NAME = _rx(r"(read.?me|how.?to|decrypt|restore|recover|ransom|instruction|!!!).*\.(txt|html?|hta|rtf|url)$")
 
 # --------------------------------------------------------------------------------------------
@@ -287,6 +290,9 @@ class Rules:
     def _file(self, ev: Event) -> None:
         path = ev.target
         p = _slash(path)
+        if BENIGN_FILES.search(p):
+            ev.noise = True
+            return
         removed = ev.action in ("deleted", "folder_deleted")
         for rx, level, reason in FILE_RULES:
             if rx.search(p):
