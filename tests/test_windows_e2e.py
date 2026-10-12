@@ -35,7 +35,11 @@ def test_sample_persistence_is_caught_end_to_end(tmp_path, capsys):
     finally:
         try:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run",
-                                0, winreg.KEY_SET_VALUE) as key:
+                                0, winreg.KEY_ALL_ACCESS) as key:
+                try:
+                    print("Run value after session:", winreg.QueryValueEx(key, name))
+                except OSError as exc:
+                    print("Run value after session: MISSING", exc)
                 winreg.DeleteValue(key, name)
         except OSError:
             pass
@@ -47,6 +51,9 @@ def test_sample_persistence_is_caught_end_to_end(tmp_path, capsys):
 
     for e in find("system", "message"):
         print(e["time"], e["target"])
+    for e in events:
+        if e["category"] == "registry":
+            print("REG", e["time"], e["action"], e["target"], e["details"].get("value"), e["noise"])
 
     run = find("registry", "value_created", lambda e: e["details"].get("value") == name)
     assert run, "Run key write not seen"

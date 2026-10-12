@@ -1,5 +1,6 @@
 """Real-registry integration tests (Windows only): winreg backend + RegNotifyChangeKeyValue."""
 
+import subprocess
 import sys
 import uuid
 
@@ -121,26 +122,40 @@ def test_default_roots_catch_every_run_key_write(session):
     assert monitor.failed is None
     run_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
     names = []
-    try:
-        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, run_path, 0, winreg.KEY_SET_VALUE) as key:
-            for i in range(5):
-                name = f"PMDiag{uuid.uuid4().hex[:6]}"
-                names.append(name)
-                written = time.monotonic()
-                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, r"C:\diag.exe")
-                seen = wait_for(lambda: sink.find("registry", "value_created", value=name), timeout=15)
-                diag = monitor.diagnose("HKCU\\" + run_path)
-                print(f"write {i}: seen={bool(seen)} after {time.monotonic() - written:.2f}s  {diag}")
-                if not seen:
-                    from pirate_monitor.registry.model import take_snapshot
-                    from pirate_monitor.registry.win32 import WinregBackend
 
-                    fresh = take_snapshot(WinregBackend(), "HKCU\\" + run_path, recursive=False)
-                    state = next(iter(fresh.values()))
-                    print("fresh read:", state.last_write, sorted(v[0] for v in state.values.values()))
-                    print("time now:", time.time())
-                assert seen, f"Run key write {i} missed; watcher state: {diag}"
-                time.sleep(1)
+    def write(i, name):
+        if i % 3 == 0:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_path, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, r"C:\diag.exe")
+            return "winreg"
+        if i % 3 == 1:
+            subprocess.run(["powershell.exe", "-NoProfile", "-Command",
+                            f"New-ItemProperty -Path 'HKCU:\\{run_path}' -Name {name} -Value 'C:\\diag.exe' -Force"],
+                           check=True, capture_output=True)
+            return "powershell"
+        subprocess.run(["reg.exe", "add", "HKCU\\" + run_path, "/v", name, "/d", r"C:\diag.exe", "/f"],
+                       check=True, capture_output=True)
+        return "reg.exe"
+
+    try:
+        for i in range(6):
+            name = f"PMDiag{uuid.uuid4().hex[:6]}"
+            names.append(name)
+            written = time.monotonic()
+            how = write(i, name)
+            seen = wait_for(lambda: sink.find("registry", "value_created", value=name), timeout=15)
+            diag = monitor.diagnose("HKCU\\" + run_path)
+            print(f"write {i} via {how}: seen={bool(seen)} after {time.monotonic() - written:.2f}s  {diag}")
+            if not seen:
+                from pirate_monitor.registry.model import take_snapshot
+                from pirate_monitor.registry.win32 import WinregBackend
+
+                fresh = take_snapshot(WinregBackend(), "HKCU\\" + run_path, recursive=False)
+                fresh_state = next(iter(fresh.values()))
+                print("fresh read:", fresh_state.last_write, sorted(v[0] for v in fresh_state.values.values()))
+                print("time now:", time.time())
+            assert seen, f"Run key write {i} via {how} missed; watcher state: {diag}"
+            time.sleep(1)
     finally:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_path, 0, winreg.KEY_SET_VALUE) as key:
             for name in names:
