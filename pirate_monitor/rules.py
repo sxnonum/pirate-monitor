@@ -165,7 +165,8 @@ REG_NOISE = [
     _rx(r"\\softwareprotectionplatform(\\|$)"),
     _rx(r"\\windows nt\\currentversion\\(networklist|notifications|perflib|winsat|update|"
         r"appcompatflags\\compatibility assistant)(\\|$)"),
-    _rx(r"\\microsoft\\windows defender\\(signature updates|scan|diagnostics|mpengine|reporting|nis)"),
+    _rx(r"\\microsoft\\windows defender\\(signature updates|scan|diagnostics|mpengine|reporting|nis|ux configuration)"),
+    _rx(r"\\currentversion\\wosc\\"),
     _rx(r"\\microsoft\\(windows search|input|inputpersonalization|speech_onecore|feeds|tabletip|ctf|clipboard|ime)(\\|$)"),
     _rx(r"\\microsoft\\office\\.*\\(file mru|place mru|user mru|resiliency|recent|identity|licensing|experiment)"),
     _rx(r"\\microsoft\\(edge|edgeupdate|onedrive|tracing|wbem|sqmclient)(\\|$)"),

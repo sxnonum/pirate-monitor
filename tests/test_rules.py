@@ -160,3 +160,17 @@ def test_extensionless_binary_found_by_content_is_flagged_by_location():
 def test_powershell_policy_test_files_are_noise():
     ev = graded(Event("file", "created", r"C:\Users\bob\AppData\Local\Temp\__PSScriptPolicyTest_jgk4kbgy.jsi.ps1"))
     assert ev.noise and ev.severity == "info"
+
+
+def test_windows_servicing_bookkeeping_is_noise():
+    ev = graded(Event("registry", "value_modified",
+                      r"HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Wosc\Client\Persistent\ClientState\MUSE",
+                      {"value": "LastUpdated", "old": "1", "new": "2"}))
+    assert ev.noise
+    ev = graded(Event("registry", "value_modified", r"HKLM\SOFTWARE\Microsoft\Windows Defender\UX Configuration",
+                      {"value": "ToastOrSsoTrigger", "old": "1", "new": "2"}))
+    assert ev.noise
+    # ...but real Defender tampering still alerts.
+    ev = graded(Event("registry", "value_created", r"HKLM\SOFTWARE\Microsoft\Windows Defender\Exclusions\Paths",
+                      {"value": r"C:\evil", "new": "0"}))
+    assert ev.severity == "alert" and not ev.noise
